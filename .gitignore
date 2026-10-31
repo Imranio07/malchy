@@ -5,3 +5,5 @@ __pycache__/
 frames/
 herd_history.json
 herd_report.json
+frames_wolf/
+*_report.json

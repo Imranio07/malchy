@@ -28,7 +28,10 @@ def save_history(history):
     HISTORY.write_text(json.dumps(sorted(history, key=lambda e: e["date"]), indent=2, ensure_ascii=False))
 
 
-def build_summary(entry, history, expected, weather_line):
+THREAT_NAMES = {"wolf": "волк", "dog": "собака", "bear": "медведь", "fox": "лиса"}
+
+
+def build_summary(entry, history, expected, weather_line, threats=None):
     earlier = [e for e in history if e["date"] < entry["date"]]
     prev = max(earlier, key=lambda e: e["date"]) if earlier else None
     return {
@@ -41,17 +44,22 @@ def build_summary(entry, history, expected, weather_line):
         "stray_ids": entry["stray_ids"],
         "motionless_ids": entry["motionless_ids"],
         "weather": weather_line,
+        "threats": threats or {},
     }
 
 
 def has_problems(s):
-    return bool(s["weather"] or s["stray_ids"] or s["motionless_ids"]
+    return bool(s["threats"] or s["weather"] or s["stray_ids"] or s["motionless_ids"]
                 or (s["change"] is not None and s["change"] < 0)
                 or (s["missing_vs_expected"] and s["missing_vs_expected"] > 0))
 
 
 def facts_message(s):
     lines = [f"Малчы — отчёт за {s['date']}"]
+    for threat, info in s["threats"].items():
+        name = THREAT_NAMES.get(threat, threat)
+        lines.append(f"🐺 ТРЕВОГА: возле стада замечен {name} (виден на {info['frames']} кадрах). "
+                     "Проверь стадо прямо сейчас!")
     if s["weather"]:
         lines.append(s["weather"])
     lines.append(f"Посчитано: {s['count']}")
@@ -140,6 +148,7 @@ def main():
     parser.add_argument("--lat", type=float, default=os.environ.get("PASTURE_LAT"))
     parser.add_argument("--lon", type=float, default=os.environ.get("PASTURE_LON"))
     parser.add_argument("--place", default=os.environ.get("PASTURE_NAME", "пастбище"))
+    parser.add_argument("--threats-from", nargs="*", default=[])
     args = parser.parse_args()
 
     if args.count is not None:
@@ -163,7 +172,11 @@ def main():
     history = [e for e in load_history() if e["date"] != args.date] + [entry]
     save_history(history)
 
-    summary = build_summary(entry, history, args.expected, weather_line)
+    threats = dict(report.get("threats", {}))
+    for path in args.threats_from:
+        threats.update(json.loads(Path(path).read_text()).get("threats", {}))
+
+    summary = build_summary(entry, history, args.expected, weather_line, threats)
     facts = facts_message(summary)
     intro = llm_intro(facts, args.lang)
     message = f"{intro}\n\n{facts}" if intro and intro_ok(intro, summary, args.lang) else facts

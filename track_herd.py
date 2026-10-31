@@ -1,5 +1,4 @@
-"""Malchy — track a herd in video frames: SAM 3 detects animals on every frame,
-a lightweight tracker links detections into IDs (memory stays flat on 8 GB)."""
+"""Malchy — track a herd in video frames and watch for predators (SAM 3)."""
 import argparse
 import json
 import math
@@ -56,17 +55,22 @@ def dedup(boxes, scores, iou_thr=0.5, inside_thr=0.8):
     return kept
 
 
-def detect(processor, image, prompt, threshold, iou_thr):
+def detect(processor, image, prompts, iou_thr):
     width, height = image.size
+    results = {}
     with torch.autocast("cuda", dtype=torch.bfloat16):
         state = processor.set_image(image)
-        out = processor.set_text_prompt(state=state, prompt=prompt)
-    boxes, scores = to_list(out["boxes"]), to_list(out["scores"])
-    if boxes and max(max(b) for b in boxes) <= 1.0:
-        boxes = [[b[0] * width, b[1] * height, b[2] * width, b[3] * height] for b in boxes]
-    confident = [i for i, s in enumerate(scores) if s >= threshold]
-    kept = dedup([boxes[i] for i in confident], [scores[i] for i in confident], iou_thr)
-    return [boxes[confident[k]] for k in kept]
+        for prompt, threshold in prompts:
+            if hasattr(processor, "reset_all_prompts"):
+                processor.reset_all_prompts(state)
+            out = processor.set_text_prompt(state=state, prompt=prompt)
+            boxes, scores = to_list(out["boxes"]), to_list(out["scores"])
+            if boxes and max(max(b) for b in boxes) <= 1.0:
+                boxes = [[b[0] * width, b[1] * height, b[2] * width, b[3] * height] for b in boxes]
+            confident = [i for i, s in enumerate(scores) if s >= threshold]
+            kept = dedup([boxes[i] for i in confident], [scores[i] for i in confident], iou_thr)
+            results[prompt] = [(boxes[confident[k]], scores[confident[k]]) for k in kept]
+    return results
 
 
 class HerdTracker:
@@ -160,16 +164,20 @@ def analyse(tracker, confirmed, last_frame, stray_factor, still_fraction, min_fr
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Track a herd in video frames with SAM 3")
+    parser = argparse.ArgumentParser(description="Track a herd and watch for predators with SAM 3")
     parser.add_argument("frames")
     parser.add_argument("--prompt", default="sheep")
+    parser.add_argument("--threats", default="wolf")
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--threat-threshold", type=float, default=0.6)
+    parser.add_argument("--threat-frames", type=int, default=2)
     parser.add_argument("--iou", type=float, default=0.5)
     parser.add_argument("--fps", type=float, default=3)
     parser.add_argument("--min-hits", type=int, default=3)
     parser.add_argument("--stray-factor", type=float, default=2.5)
     parser.add_argument("--still-fraction", type=float, default=0.02)
     parser.add_argument("--min-frames", type=int, default=6)
+    parser.add_argument("--name", default="herd")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
@@ -178,22 +186,32 @@ def main():
     if not paths:
         raise SystemExit(f"No .jpg frames in {args.frames}")
 
+    threats = [t.strip() for t in args.threats.split(",") if t.strip()]
+    prompts = [(args.prompt, args.threshold)] + [(t, args.threat_threshold) for t in threats]
+
     h, w = cv2.imread(str(paths[0])).shape[:2]
     tracker = HerdTracker(diag=math.hypot(w, h))
     model = build_sam3_image_model()
     processor = Sam3Processor(model)
 
-    per_frame = {}
+    per_frame, threat_boxes = {}, {t: {} for t in threats}
     for f, path in enumerate(paths):
-        boxes = detect(processor, Image.open(path).convert("RGB"), args.prompt, args.threshold, args.iou)
-        per_frame[f] = tracker.update(f, boxes)
-        print(f"frame {f + 1}/{len(paths)}: {len(boxes)} detected, {tracker.next_id - 1} tracks so far")
+        found = detect(processor, Image.open(path).convert("RGB"), prompts, args.iou)
+        per_frame[f] = tracker.update(f, [b for b, _ in found[args.prompt]])
+        for t in threats:
+            if found[t]:
+                threat_boxes[t][f] = found[t]
+        seen = ", ".join(f"{t}: {len(found[t])}" for t in threats if found[t])
+        print(f"frame {f + 1}/{len(paths)}: {len(found[args.prompt])} {args.prompt}"
+              f"{' | THREAT ' + seen if seen else ''}")
 
     confirmed = {t for t, tr in tracker.tracks.items() if tr["hits"] >= args.min_hits}
-    if not confirmed:
-        raise SystemExit(f"No '{args.prompt}' tracked. Try a lower --threshold or another clip.")
     strays, motionless = analyse(tracker, confirmed, len(paths) - 1,
                                  args.stray_factor, args.still_fraction, args.min_frames)
+    threat_report = {
+        t: {"frames": len(fr), "first_frame": min(fr), "max_in_frame": max(len(v) for v in fr.values())}
+        for t, fr in threat_boxes.items() if len(fr) >= args.threat_frames
+    }
 
     first_seen = {t: min(tracker.tracks[t]["history"]) for t in confirmed}
     report = {
@@ -201,29 +219,39 @@ def main():
         "method": "SAM 3 detection on every frame + IoU tracking with camera-motion compensation",
         "frames": len(paths),
         "unique_animals": len(confirmed),
-        "max_visible_in_one_frame": max(sum(1 for t in v if t in confirmed) for v in per_frame.values()),
+        "max_visible_in_one_frame": max((sum(1 for t in v if t in confirmed) for v in per_frame.values()),
+                                        default=0),
         "stray_ids": strays,
         "motionless_ids": motionless,
+        "threats": threat_report,
     }
-    Path("herd_report.json").write_text(json.dumps(report, indent=2))
+    Path(f"{args.name}_report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
-    writer = cv2.VideoWriter("herd_tracked.mp4", cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (w, h))
+    writer = cv2.VideoWriter(f"{args.name}_tracked.mp4", cv2.VideoWriter_fourcc(*"mp4v"), args.fps, (w, h))
     for f, path in enumerate(paths):
         img = cv2.imread(str(path))
         shown = {t: b for t, b in per_frame[f].items() if t in confirmed}
         for t, b in shown.items():
-            colour = (0, 0, 255) if t in strays else (0, 220, 255) if t in motionless else (0, 200, 0)
+            colour = (0, 128, 255) if t in strays else (0, 220, 255) if t in motionless else (0, 200, 0)
             x1, y1, x2, y2 = map(int, b)
             cv2.rectangle(img, (x1, y1), (x2, y2), colour, 2)
             cv2.putText(img, str(t), (x1 + 3, y1 + 16), cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2)
+        for t in threat_report:
+            for b, score in threat_boxes[t].get(f, []):
+                x1, y1, x2, y2 = map(int, b)
+                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 3)
+                cv2.putText(img, f"{t.upper()} {score:.2f}", (x1 + 3, y1 - 6),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         counted = sum(1 for t in confirmed if first_seen[t] <= f)
         label = f"{args.prompt}: {counted} counted | in frame: {len(shown)}"
+        if any(f in threat_boxes[t] for t in threat_report):
+            label += " | THREAT!"
         cv2.putText(img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 4)
         cv2.putText(img, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
         writer.write(img)
     writer.release()
-    print("Saved herd_tracked.mp4 and herd_report.json")
+    print(f"Saved {args.name}_tracked.mp4 and {args.name}_report.json")
 
 
 if __name__ == "__main__":
