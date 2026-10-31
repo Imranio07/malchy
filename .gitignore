@@ -2,3 +2,4 @@
 *.mp4
 .env
 __pycache__/
+frames/
