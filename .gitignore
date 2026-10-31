@@ -7,3 +7,5 @@ herd_history.json
 herd_report.json
 frames_wolf/
 *_report.json
+voice.*
+test.wav
