@@ -1,5 +1,6 @@
-"""Malchy — daily herd report. Facts are computed in code; the model only
-rewrites them, and a guardrail rejects changed numbers or 'more' vs 'fewer'."""
+"""Malchy — daily herd report. Safety-critical facts and advice are written by
+code and sent word for word; the model only adds one warm opening sentence
+with no numbers, checked by a guardrail."""
 import argparse
 import datetime as dt
 import json
@@ -9,9 +10,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import weather
+
 HISTORY = Path("herd_history.json")
 LANGUAGES = {"ru": "Russian", "ky": "Kyrgyz", "en": "English"}
-MORE_WORDS = ("больше", "более", "прибав", "more")
+ALL_CLEAR = ("всё хорошо", "все хорошо", "всё спокойно", "все спокойно", "в порядке", "нет проблем",
+             "all good", "everything is fine")
 
 
 def load_history():
@@ -24,25 +28,33 @@ def save_history(history):
     HISTORY.write_text(json.dumps(sorted(history, key=lambda e: e["date"]), indent=2, ensure_ascii=False))
 
 
-def build_summary(entry, history, expected):
+def build_summary(entry, history, expected, weather_line):
     earlier = [e for e in history if e["date"] < entry["date"]]
     prev = max(earlier, key=lambda e: e["date"]) if earlier else None
     return {
         "date": entry["date"],
-        "animal": entry["animal"],
         "count": entry["count"],
-        "previous_date": prev["date"] if prev else None,
         "previous_count": prev["count"] if prev else None,
         "change": entry["count"] - prev["count"] if prev else None,
         "expected": expected,
         "missing_vs_expected": expected - entry["count"] if expected else None,
         "stray_ids": entry["stray_ids"],
         "motionless_ids": entry["motionless_ids"],
+        "weather": weather_line,
     }
 
 
-def template_message(s):
-    lines = [f"Малчы — отчёт за {s['date']}", f"Посчитано: {s['count']}"]
+def has_problems(s):
+    return bool(s["weather"] or s["stray_ids"] or s["motionless_ids"]
+                or (s["change"] is not None and s["change"] < 0)
+                or (s["missing_vs_expected"] and s["missing_vs_expected"] > 0))
+
+
+def facts_message(s):
+    lines = [f"Малчы — отчёт за {s['date']}"]
+    if s["weather"]:
+        lines.append(s["weather"])
+    lines.append(f"Посчитано: {s['count']}")
     if s["change"] is not None:
         if s["change"] < 0:
             lines.append(f"Вчера было {s['previous_count']}, сегодня {s['count']} — не хватает {-s['change']}.")
@@ -58,55 +70,43 @@ def template_message(s):
     if s["motionless_ids"]:
         ids = ", ".join(map(str, s["motionless_ids"]))
         lines.append(f"Почти не двигаются: {len(s['motionless_ids'])} (№ {ids}). Возможно, больны — осмотри.")
-    if not s["stray_ids"] and not s["motionless_ids"] and (s["change"] is None or s["change"] >= 0):
+    if not has_problems(s):
         lines.append("Всё спокойно.")
     return "\n".join(lines)
 
 
-def allowed_numbers(s):
-    nums = {s["count"], len(s["stray_ids"]), len(s["motionless_ids"]), *s["stray_ids"], *s["motionless_ids"]}
-    for key in ("previous_count", "expected", "missing_vs_expected"):
-        if s[key] is not None:
-            nums.add(s[key])
-    if s["change"] is not None:
-        nums.add(abs(s["change"]))
-    nums.update(int(p) for p in s["date"].split("-"))
-    return nums
-
-
-def passes_guardrail(text, s):
-    found = {int(n) for n in re.findall(r"\d+", text)}
-    extra = found - allowed_numbers(s)
-    if extra:
-        print(f"[guardrail] model used numbers not in the data: {sorted(extra)}")
+def intro_ok(intro, s, lang):
+    if re.search(r"\d", intro):
+        print("[guardrail] intro contains numbers — facts must come from code only")
         return False
-    lowered = text.lower()
-    if s["change"] is not None and s["change"] < 0 and any(w in lowered for w in MORE_WORDS):
-        print("[guardrail] model said 'more' but the herd got smaller")
+    if lang != "en" and re.search(r"[A-Za-z]{3,}", intro):
+        print("[guardrail] intro mixes English words into the message")
         return False
-    if s["change"] is not None and s["change"] < 0 and -s["change"] not in found:
-        print("[guardrail] model dropped the number of missing animals")
+    if has_problems(s) and any(p in intro.lower() for p in ALL_CLEAR):
+        print("[guardrail] intro says everything is fine, but there are problems")
+        return False
+    if len(intro) > 220:
+        print("[guardrail] intro too long")
         return False
     return True
 
 
-def llm_message(facts, lang):
+def llm_intro(facts, lang):
     base, model = os.environ.get("LLM_BASE_URL"), os.environ.get("LLM_MODEL")
     if not base or not model:
         return None
+    language = LANGUAGES.get(lang, "Russian")
     system = (
-        "You are Malchy, a helpful assistant for a shepherd in Kyrgyzstan. "
-        f"Rewrite the herd report below as a short, warm message (at most 5 lines) in {LANGUAGES.get(lang, 'Russian')}. "
-        "Keep every number exactly as written and keep its meaning: if animals are missing, say they are missing. "
-        "Do not add any new numbers or facts. Put the most urgent problem first."
+        "You are Malchy, a caring assistant for a shepherd in Kyrgyzstan. "
+        f"Write ONE short, warm opening sentence in {language} for the herd report below. "
+        "Mention the most urgent issue in general words. Do not use any numbers. "
+        "Do not give advice and do not repeat details — the report itself follows your sentence. "
+        f"Write only in {language}; never use English words. Output only the sentence."
     )
     body = json.dumps({
         "model": model,
-        "temperature": 0.2,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": facts},
-        ],
+        "temperature": 0.3,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": facts}],
     }).encode()
     request = urllib.request.Request(
         base.rstrip("/") + "/chat/completions", data=body,
@@ -114,9 +114,10 @@ def llm_message(facts, lang):
                  "Authorization": f"Bearer {os.environ.get('LLM_API_KEY', 'none')}"})
     try:
         with urllib.request.urlopen(request, timeout=120) as response:
-            return json.load(response)["choices"][0]["message"]["content"].strip()
+            text = json.load(response)["choices"][0]["message"]["content"].strip()
+            return text.strip('"«» \n')
     except Exception as error:
-        print(f"[warning] LLM unavailable ({error}); using the template")
+        print(f"[warning] LLM unavailable ({error}); sending facts only")
         return None
 
 
@@ -136,16 +137,25 @@ def main():
     parser.add_argument("--count", type=int)
     parser.add_argument("--expected", type=int)
     parser.add_argument("--lang", default="ru", choices=LANGUAGES)
+    parser.add_argument("--lat", type=float, default=os.environ.get("PASTURE_LAT"))
+    parser.add_argument("--lon", type=float, default=os.environ.get("PASTURE_LON"))
+    parser.add_argument("--place", default=os.environ.get("PASTURE_NAME", "пастбище"))
     args = parser.parse_args()
 
     if args.count is not None:
-        report = {"prompt": "sheep", "unique_animals": args.count, "stray_ids": [], "motionless_ids": []}
+        report = {"unique_animals": args.count, "stray_ids": [], "motionless_ids": []}
     else:
         report = json.loads(Path(args.report).read_text())
 
+    weather_line = None
+    if args.lat is not None and args.lon is not None and args.count is None:
+        try:
+            weather_line = weather.warning(float(args.lat), float(args.lon), args.place)
+        except Exception as error:
+            print(f"[warning] weather unavailable ({error})")
+
     entry = {
         "date": args.date,
-        "animal": report.get("prompt", "sheep"),
         "count": report["unique_animals"],
         "stray_ids": report.get("stray_ids", []),
         "motionless_ids": report.get("motionless_ids", []),
@@ -153,11 +163,10 @@ def main():
     history = [e for e in load_history() if e["date"] != args.date] + [entry]
     save_history(history)
 
-    summary = build_summary(entry, history, args.expected)
-    facts = template_message(summary)
-    message = llm_message(facts, args.lang)
-    if message is None or not passes_guardrail(message, summary):
-        message = facts
+    summary = build_summary(entry, history, args.expected, weather_line)
+    facts = facts_message(summary)
+    intro = llm_intro(facts, args.lang)
+    message = f"{intro}\n\n{facts}" if intro and intro_ok(intro, summary, args.lang) else facts
     print(message)
     if send_telegram(message):
         print("[sent to Telegram]")
