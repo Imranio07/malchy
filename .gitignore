@@ -3,3 +3,5 @@
 .env
 __pycache__/
 frames/
+herd_history.json
+herd_report.json
