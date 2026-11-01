@@ -385,6 +385,7 @@ class TopDown:
         self.writer = cv2.VideoWriter(path, cv2.VideoWriter_fourcc(*"mp4v"), fps, (size + panel, size))
         self.trail = []
         self.frame = None
+        self.label = None
 
     def px(self, x, y):
         return int((x - self.x0) * self.scale), int(self.size - (y - self.y0) * self.scale)
@@ -411,7 +412,7 @@ class TopDown:
         if stray is not None:
             sx, sy = self.px(*flock.p[stray])
             back = phase in ("RETURN", "LAND", "DONE")
-            cv2.putText(img, f"#{stray + 1}" + (" back" if back else ""), (sx + r + 3, sy - r),
+            cv2.putText(img, f"#{self.label or stray + 1}" + (" back" if back else ""), (sx + r + 3, sy - r),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (90, 230, 120) if back else (0, 140, 255), 2, cv2.LINE_AA)
         if target is not None:
             cv2.drawMarker(img, self.px(*target[:2]), (0, 255, 255), cv2.MARKER_DIAMOND, 12, 2)
@@ -493,6 +494,7 @@ def main():
     parser.add_argument("--show", action="store_true", help="show the top-down view live")
     parser.add_argument("--seed", type=int, default=3)
     parser.add_argument("--max-time", type=float, default=300, help="give up after this many seconds")
+    parser.add_argument("--label", type=int, help="number to call the stray in messages (from the report)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -501,6 +503,7 @@ def main():
     if not strays:
         raise SystemExit("No stray found — the herd is together.")
     stray = strays[0]
+    name = args.label or stray + 1
     print(f"[malchy] stray sheep #{stray + 1}: {math.dist(flock.p[stray], herd_centre(flock.p, stray)):.1f} m "
           f"from the herd")
 
@@ -514,6 +517,7 @@ def main():
     span = max(hi - lo)
     mid = (lo + hi) / 2
     view = TopDown("herding_topdown.mp4", (mid[0] - span / 2, mid[1] - span / 2, mid[0] + span / 2, mid[1] + span / 2))
+    view.label = name
 
     drone.update()
     drone.start(SAFE_ALT)
@@ -531,7 +535,7 @@ def main():
         events.append({"t": round(stamp, 1), "event": text})
         print(f"[{stamp:6.1f}s] {text}")
 
-    log(f"take-off done, stray #{stray + 1} is {start_dist:.1f} m from the herd")
+    log(f"take-off done, stray #{name} is {start_dist:.1f} m from the herd")
     try:
         while True:
             wall = time.time()
@@ -574,7 +578,7 @@ def main():
                 target = hold                               # quiet, above the alarm height
                 if gap < REJOIN_DIST:
                     phase, t_returned = "RETURN", t - t0
-                    log(f"stray #{stray + 1} is back with the herd")
+                    log(f"stray #{name} is back with the herd")
                 elif gap > SETTLE_GAP + 4:
                     phase = "APPROACH"
                     log("stray wandered off again — going round")
@@ -604,7 +608,7 @@ def main():
                 gz.update(flock.p, flock.heading)
 
             dist_now = math.dist(flock.p[stray], centre)
-            info = [f"stray #{stray + 1}: {dist_now:5.1f} m from herd",
+            info = [f"stray #{name}: {dist_now:5.1f} m from herd",
                     f"drone altitude: {pos[2]:4.1f} m",
                     f"bark: {'ON' if barking else 'off'}",
                     f"herd size: {len(flock.p)}"]
@@ -625,7 +629,7 @@ def main():
         view.close()
         cv2.destroyAllWindows()
 
-    result = {"stray": stray + 1, "start_distance_m": round(start_dist, 1),
+    result = {"stray": name, "start_distance_m": round(start_dist, 1),
               "returned": t_returned is not None,
               "time_to_return_s": round(t_returned, 1) if t_returned is not None else None,
               "herd_moved_m": round(math.dist(start_centre, herd_centre(flock.p, stray)), 1),
@@ -635,11 +639,11 @@ def main():
     print("Saved herding_topdown.mp4 and herding_log.json")
     if args.telegram:
         if t_returned is not None:
-            notify(f"🐑 Малчы: отбившаяся овца № {stray + 1} возвращена к стаду за {t_returned:.0f} с. "
-                   f"Дрон вернулся на базу.\n🐑 Малчы: адашкан № {stray + 1} кой {t_returned:.0f} секундда "
+            notify(f"🐑 Малчы: отбившаяся овца № {name} возвращена к стаду за {t_returned:.0f} с. "
+                   f"Дрон вернулся на базу.\n🐑 Малчы: адашкан № {name} кой {t_returned:.0f} секундда "
                    f"оторго кайтарылды.")
         else:
-            notify(f"⚠️ Малчы: не удалось вернуть овцу № {stray + 1} — проверь её сам.")
+            notify(f"⚠️ Малчы: не удалось вернуть овцу № {name} — проверь её сам.")
 
 
 if __name__ == "__main__":

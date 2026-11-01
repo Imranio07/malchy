@@ -29,6 +29,9 @@ INTENTS = {
 KYRGYZ_HINTS = ("ү", "ө", "ң", "канча", "барбы", "кандай", "жок", "бугун", "кайсы", "карышкыр")
 THREAT_KY = {"wolf": "карышкыр", "dog": "ит", "bear": "аюу", "fox": "түлкү"}
 THREAT_RU = {"wolf": "волк", "dog": "собака", "bear": "медведь", "fox": "лиса"}
+HERD_STEMS = ("кайтар", "жибер", "дрон", "верни", "загони", "пригони")
+HERD_PYTHON = os.environ.get("HERD_PYTHON", "/usr/bin/python3")   # system python: pymavlink + Gazebo
+herd_proc = None
 
 
 def api(method, **params):
@@ -85,8 +88,8 @@ def answer(question):
         if today is None and intent != "help":
             return "Азырынча маалымат жок — адегенде оторду санап ал." if ky else \
                 "Пока нет данных — сначала посчитай стадо."
-        return ("Мындай сурай аласың: канча кой бар? кайсы кой жок? аба ырайы кандай? карышкыр барбы?"
-                if ky else "Можно спросить: сколько овец? кого не хватает? какая погода? был ли волк?")
+        return ("Мындай сурай аласың: канча кой бар? кайсы кой жок? аба ырайы кандай? карышкыр барбы? дронду жибер"
+                if ky else "Можно спросить: сколько овец? кого не хватает? какая погода? был ли волк? Или: верни овцу дроном")
 
     if intent == "threat":
         if not threats:
@@ -147,6 +150,31 @@ def answer(question):
     return text
 
 
+# ---------- Drone ----------
+
+def first_stray():
+    today, _, _ = load_facts()
+    strays = today.get("stray_ids", []) if today else []
+    return strays[0] if strays else None
+
+
+def launch_herding(stray_id, ky):
+    """Start herding.py: the drone flies out, pushes the stray back and reports in Telegram."""
+    global herd_proc
+    if herd_proc is not None and herd_proc.poll() is None:
+        return "🚁 Дрон азыр абада." if ky else "🚁 Дрон уже в воздухе."
+    if stray_id is None:
+        return "Отордон бөлүнгөн кой жок." if ky else "Отбившихся нет — дрон не нужен."
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME")}
+    cmd = [HERD_PYTHON, "herding.py", "--drone", "mavlink", "--gazebo", "--telegram", "--show",
+           "--label", str(stray_id)]
+    if Path("bark.wav").exists():
+        cmd += ["--bark-sound", "bark.wav"]
+    herd_proc = subprocess.Popen(cmd, env=env, stdout=open("herding_run.log", "w"), stderr=subprocess.STDOUT)
+    return (f"🚁 Дрон учуп чыкты: № {stray_id} койду оторго кайтарат. Бүткөндө кабар берем." if ky
+            else f"🚁 Дрон вылетает: возвращаю овцу № {stray_id} к стаду. Сообщу, когда закончу.")
+
+
 def main():
     from omnilingual_asr.models.inference.pipeline import ASRInferencePipeline
 
@@ -165,6 +193,16 @@ def main():
             continue
         for update in updates:
             offset = update["update_id"] + 1
+            if "callback_query" in update:                  # a button under a report was pressed
+                cq = update["callback_query"]
+                if str(cq.get("message", {}).get("chat", {}).get("id")) != CHAT_ID:
+                    continue
+                api("answerCallbackQuery", callback_query_id=cq["id"])
+                if cq.get("data", "").startswith("herd:"):
+                    reply = launch_herding(int(cq["data"].split(":")[1]), ky=False)
+                    print(f"[button] {cq['data']}\nA: {reply}\n")
+                    send(reply)
+                continue
             message = update.get("message", {})
             if str(message.get("chat", {}).get("id")) != CHAT_ID:
                 continue
@@ -177,7 +215,11 @@ def main():
                 question, heard = message["text"], ""
             else:
                 continue
-            reply = heard + answer(question)
+            if any(s in question.lower() for s in HERD_STEMS):
+                ky = any(h in question.lower() for h in KYRGYZ_HINTS + ("жибер", "кайтар"))
+                reply = heard + launch_herding(first_stray(), ky)
+            else:
+                reply = heard + answer(question)
             print(f"Q: {question}\nA: {reply}\n")
             send(reply)
 

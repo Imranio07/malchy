@@ -129,11 +129,14 @@ def llm_intro(facts, lang):
         return None
 
 
-def send_telegram(text):
+def send_telegram(text, buttons=None):
     token, chat = os.environ.get("TELEGRAM_BOT_TOKEN"), os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
         return False
-    data = urllib.parse.urlencode({"chat_id": chat, "text": text}).encode()
+    params = {"chat_id": chat, "text": text}
+    if buttons:
+        params["reply_markup"] = json.dumps({"inline_keyboard": buttons}, ensure_ascii=False)
+    data = urllib.parse.urlencode(params).encode()
     with urllib.request.urlopen(f"https://api.telegram.org/bot{token}/sendMessage", data=data, timeout=30):
         return True
 
@@ -181,7 +184,11 @@ def main():
     intro = llm_intro(facts, args.lang)
     message = f"{intro}\n\n{facts}" if intro and intro_ok(intro, summary, args.lang) else facts
     print(message)
-    if send_telegram(message):
+    buttons = None
+    if summary["stray_ids"]:
+        first = summary["stray_ids"][0]
+        buttons = [[{"text": f"🚁 Вернуть № {first} дроном · Кайтар", "callback_data": f"herd:{first}"}]]
+    if send_telegram(message, buttons):
         print("[sent to Telegram]")
 
 
