@@ -32,6 +32,12 @@ THREAT_RU = {"wolf": "волк", "dog": "собака", "bear": "медведь"
 HERD_STEMS = ("кайтар", "жибер", "дрон", "верни", "загони", "пригони")
 HERD_PYTHON = os.environ.get("HERD_PYTHON", "/usr/bin/python3")   # system python: pymavlink + Gazebo
 herd_proc = None
+KAZAKH_TO_KYRGYZ = str.maketrans({"қ": "к", "ғ": "г", "ұ": "у", "і": "и", "ә": "а", "һ": "х"})
+
+
+def normalize(text):
+    """ASR sometimes writes Kazakh letters in Kyrgyz words (қарышқыр -> карышкыр)."""
+    return text.lower().translate(KAZAKH_TO_KYRGYZ)
 
 
 def api(method, **params):
@@ -79,7 +85,7 @@ def when_ky(t):
 
 
 def answer(question):
-    q = question.lower() + " "
+    q = normalize(question) + " "
     ky = any(h in q for h in KYRGYZ_HINTS)
     intent = next((name for name, stems in INTENTS.items() if any(s in q for s in stems)), "help")
     today, prev, threats = load_facts()
@@ -209,7 +215,7 @@ def main():
             if "voice" in message:
                 with tempfile.TemporaryDirectory() as folder:
                     wav = download_voice(message["voice"]["file_id"], folder)
-                    question = asr.transcribe([str(wav)], lang=[ASR_LANG], batch_size=1)[0]
+                    question = normalize(asr.transcribe([str(wav)], lang=[ASR_LANG], batch_size=1)[0])
                 heard = f"🎙 Уктум: «{question}»\n\n"
             elif "text" in message:
                 question, heard = message["text"], ""
