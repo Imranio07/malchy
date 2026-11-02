@@ -8,9 +8,11 @@ send the drone to bring a stray back to the herd.
 Built solo for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026),
 theme *Build for Your World*, Indie track.
 
-> 🎬 **Demo video:** _add link_ · 🐦 **Post:** _add link_
-
+> 🎬 **Demo video:** [Watch on YouTube](https://youtu.be/WbnDDEJQx00) · 🐦 **Post:** _add link_
 ---
+- Sheep test photo: Bobjacktim, Wikimedia Commons (`15_charollais_rams.jpg`),
+- Herd video:Sergey Guk https://www.pexels.com/video/drone-footage-of-sheep-in-australian-fields-30832006/on Pexels
+- Wolf video: [Nicky Pe]([ссылка на страницу видео](https://www.pexels.com/ru-ru/video/7964625/)) on Pexels
 
 ## The problem
 
