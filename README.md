@@ -9,10 +9,8 @@ Built solo for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 202
 theme *Build for Your World*, Indie track.
 
 > 🎬 **Demo video:** [Watch on YouTube](https://youtu.be/WbnDDEJQx00) · 🐦 **Post:** _add link_
+
 ---
-- Sheep test photo: Bobjacktim, Wikimedia Commons (`15_charollais_rams.jpg`),
-- Herd video:Sergey Guk https://www.pexels.com/video/drone-footage-of-sheep-in-australian-fields-30832006/on Pexels
-- Wolf video: [Nicky Pe]([ссылка на страницу видео](https://www.pexels.com/ru-ru/video/7964625/)) on Pexels
 
 ## The problem
 
@@ -162,9 +160,9 @@ python3 herding.py --drone sim
 
 ## Credits
 
-- Sheep test photo: _author_, Wikimedia Commons (`15_charollais_rams.jpg`), _license_
-- Herd video: _source and author_
-- Wolf video: _source and author_
+- Sheep test photo (`15_charollais_rams.jpg`): Bobjacktim, [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:15_charollais_rams.jpg), used under the license stated on the file page
+- Herd video: Sergey Guk, [Pexels](https://www.pexels.com/video/drone-footage-of-sheep-in-australian-fields-30832006/)
+- Wolf video: Nicky Pe, [Pexels](https://www.pexels.com/ru-ru/video/7964625/)
 - Dog bark: Joseph Sardin, [BigSoundBank](https://bigsoundbank.com/barking-dog-inside-s0112.html), CC0
 - Livestock figures: National Statistical Committee of Kyrgyzstan via [Economist.kg](https://economist.kg/agriculture/2026/05/12/porosiatam-zdes-ne-mesto-kak-izmenilos-skotovodstvo-kyrgyzstana-za-35-let/)
 - Strömbom D. et al., "Solving the shepherding problem: heuristics for herding autonomous, interacting agents", *J. R. Soc. Interface*, 2014
