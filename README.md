@@ -8,7 +8,7 @@ send the drone to bring a stray back to the herd.
 Built solo for the **Meta Global AI Developer Hackathon** (Oct 26 – Nov 4, 2026),
 theme *Build for Your World*, Indie track.
 
-> 🎬 **Demo video:** [Watch on YouTube](https://youtu.be/WbnDDEJQx00) · 🐦 **Post:** _add link_
+> 🎬 **Demo video:** [Watch on YouTube](https://youtu.be/WbnDDEJQx00) · 🐦
 
 ---
 
